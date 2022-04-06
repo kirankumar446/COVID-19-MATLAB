@@ -1,0 +1,101 @@
+clc;
+clear all;
+close all;
+% Images Datapath 
+datapath='D:\Covid data2'; % Choose your data Path
+ 
+% Image Datastore
+imds=imageDatastore(datapath, ...
+    'IncludeSubfolders',true, ...
+    'LabelSource','foldernames');
+
+% Determine the split up
+total_split=countEachLabel(imds);
+% Number of Images
+num_images=length(imds.Labels);
+
+% Visualize random images
+perm=randperm(num_images,8);
+figure;
+for idx=1:length(perm)
+    
+    subplot(2,4,idx);
+    imshow(imread(imds.Files{perm(idx)}));
+    title(sprintf('%s',imds.Labels(perm(idx))))
+    
+end
+    % ResNet Architecture 
+    net=resnet50;
+    lgraph = layerGraph(net);
+    clear net;
+    
+    % Number of categories
+    numClasses = numel(categories(imds.Labels)); %Number of array elements
+    
+    % New Learnable Layer
+    newLearnableLayer = fullyConnectedLayer(numClasses, ...
+        'Name','new_fc', ...
+        'WeightLearnRateFactor',10, ...
+        'BiasLearnRateFactor',10);
+    
+    % Replacing the last 3 layers with new layers
+    lgraph = replaceLayer(lgraph,'fc1000',newLearnableLayer);
+    newsoftmaxLayer = softmaxLayer('Name','new_softmax'); %A softmax layer applies a softmax function to the input
+    lgraph = replaceLayer(lgraph,'fc1000_softmax',newsoftmaxLayer);
+    newClassLayer = classificationLayer('Name','new_classoutput'); % A classification layer computes the cross entropy loss for multi-class
+    lgraph = replaceLayer(lgraph,'ClassificationLayer_fc1000',newClassLayer);
+        
+    % Preprocessing Technique
+    imds.ReadFcn = @(filename)preprocess_Xray(filename);
+    
+    % Training Options, we choose a small mini-batch size due to limited images 
+    options = trainingOptions('adam',...
+        'MaxEpochs',5,'MiniBatchSize',10,...
+        'Shuffle','every-epoch', ...
+        'InitialLearnRate',1e-4, ...
+        'Verbose',false, ...
+        'Plots','training-progress');
+    
+    % Data Augumentation
+    augmenter = imageDataAugmenter( ...
+        'RandRotation',[-5 5],'RandXReflection',1,...
+        'RandYReflection',1,'RandXShear',[-0.05 0.05],'RandYShear',[-0.05 0.05]);
+    
+    % Resizing all training images to [224 224] for ResNet architecture
+    auimds = augmentedImageDatastore([224 224],imds,'DataAugmentation',augmenter);
+    
+    % Training
+    netTransfer = trainNetwork(auimds,lgraph,options);
+    
+% Reading one image from the database and Classify
+[filename, pathname] = imgetfile;  
+im = preprocess_Xray(filename);
+ imResized = imresize(im,[224 224]);
+[class, score]=classify(netTransfer,imResized);
+figure
+imshow(imResized)
+ title([ 'Predclass=' char(string(class)),', ','score=',num2str(max(score))])
+
+%Preprocessing Function
+function Iout = preprocess_Xray(filename)
+% This function preprocesses the given X-ray image by converting it into
+% grayscale if required and later converting to 3-channel image to adapt to
+% existing deep learning architectures 
+%
+% Author: Barath Narayanan
+% Date: 3/17/2020
+
+% Read the Filename
+I = imread(filename);
+
+% Some images might be RGB, convert them to Grayscale
+if ~ismatrix(I)
+    I=rgb2gray(I); 
+end
+
+% Replicate the image 3 times to create an RGB image
+Iout = cat(3,I,I,I);
+
+end
+
+
